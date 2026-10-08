@@ -8,7 +8,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-int dns_client_query(
+static int dns_client_query_attempt(
     const char *server_ip,
     uint16_t server_port,
     const uint8_t *query,
@@ -31,33 +31,31 @@ int dns_client_query(
         response_length == NULL ||
         query_length == 0 ||
         response_size == 0 ||
-        timeout_seconds < 0) {
-        return -1;
+        timeout_seconds != DNS_CLIENT_TIMEOUT_SECONDS) {
+        return DNS_CLIENT_ERROR;
     }
 
     *response_length = 0;
 
-    // Cria socket
     socket_fd = socket(
-        AF_INET, // IPv4
-        SOCK_DGRAM, // UDP
-        0 // protocolo padrão correspondente ao tipo
+        AF_INET,
+        SOCK_DGRAM,
+        0
     );
 
     if (socket_fd < 0) {
         perror("socket");
-        return -1;
+        return DNS_CLIENT_ERROR;
     }
 
-    // setta uma valor na memória
     memset(
-        &server_address, // ponto inicial na memória
-        0, // valor que usado para preencher
-        sizeof(server_address) // até onde irá na memória
+        &server_address,
+        0,
+        sizeof(server_address)
     );
 
-    server_address.sin_family = AF_INET; // IPv4
-    server_address.sin_port = htons(server_port); //
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(server_port);
 
     result = inet_pton(
         AF_INET,
@@ -65,22 +63,24 @@ int dns_client_query(
         &server_address.sin_addr
     );
 
-    if (result != 1) {
-        if (result == 0) {
-            fprintf(
-                stderr,
-                "Erro: endereco IPv4 invalido: %s\n",
-                server_ip
-            );
-        } else {
-            perror("inet_pton");
-        }
+    if (result == 0) {
+        fprintf(
+            stderr,
+            "Erro: endereco IPv4 invalido: %s\n",
+            server_ip
+        );
 
         close(socket_fd);
-        return -1;
+        return DNS_CLIENT_ERROR;
     }
 
-    timeout.tv_sec = timeout_seconds;
+    if (result < 0) {
+        perror("inet_pton");
+        close(socket_fd);
+        return DNS_CLIENT_ERROR;
+    }
+
+    timeout.tv_sec = DNS_CLIENT_TIMEOUT_SECONDS;
     timeout.tv_usec = 0;
 
     result = setsockopt(
@@ -94,7 +94,7 @@ int dns_client_query(
     if (result < 0) {
         perror("setsockopt");
         close(socket_fd);
-        return -1;
+        return DNS_CLIENT_ERROR;
     }
 
     sent_bytes = sendto(
@@ -109,17 +109,17 @@ int dns_client_query(
     if (sent_bytes < 0) {
         perror("sendto");
         close(socket_fd);
-        return -1;
+        return DNS_CLIENT_ERROR;
     }
 
     if ((size_t)sent_bytes != query_length) {
         fprintf(
             stderr,
-            "Erro: quantidade de bytes enviada foi incompleta\n"
+            "Erro: envio incompleto da consulta DNS\n"
         );
 
         close(socket_fd);
-        return -1;
+        return DNS_CLIENT_ERROR;
     }
 
     received_bytes = recvfrom(
@@ -133,21 +133,82 @@ int dns_client_query(
 
     if (received_bytes < 0) {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            fprintf(
-                stderr,
-                "Erro: tempo limite de recebimento excedido\n"
-            );
-        } else {
-            perror("recvfrom");
+            close(socket_fd);
+            return DNS_CLIENT_TIMEOUT;
         }
 
+        perror("recvfrom");
         close(socket_fd);
-        return -1;
+        return DNS_CLIENT_ERROR;
+    }
+
+    if (received_bytes < 12) {
+        close(socket_fd);
+        return DNS_CLIENT_INVALID_RESPONSE;
     }
 
     *response_length = (size_t)received_bytes;
 
     close(socket_fd);
 
-    return 0;
+    return DNS_CLIENT_OK;
+}
+
+int dns_client_query(
+    const char *server_ip,
+    uint16_t server_port,
+    const uint8_t *query,
+    size_t query_length,
+    uint8_t *response,
+    size_t response_size,
+    size_t *response_length,
+    int timeout_seconds
+) {
+    return dns_client_query_attempt(
+        server_ip,
+        server_port,
+        query,
+        query_length,
+        response,
+        response_size,
+        response_length,
+        timeout_seconds
+    );
+}
+
+int dns_client_query_retry(
+    const char *server_ip,
+    uint16_t server_port,
+    const uint8_t *query,
+    size_t query_length,
+    uint8_t *response,
+    size_t response_size,
+    size_t *response_length,
+    unsigned int attempts
+) {
+    unsigned int attempt;
+    int result;
+
+    if (attempts == 0) {
+        return DNS_CLIENT_ERROR;
+    }
+
+    for (attempt = 0; attempt < attempts; ++attempt) {
+        result = dns_client_query_attempt(
+            server_ip,
+            server_port,
+            query,
+            query_length,
+            response,
+            response_size,
+            response_length,
+            DNS_CLIENT_TIMEOUT_SECONDS
+        );
+
+        if (result != DNS_CLIENT_TIMEOUT) {
+            return result;
+        }
+    }
+
+    return DNS_CLIENT_TIMEOUT;
 }
