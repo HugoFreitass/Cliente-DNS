@@ -7,6 +7,7 @@ CFLAGS := -std=c11 \
           -Iinclude
 
 TARGET := meu_cliente
+TEST_TARGET := tests/test_dns_client_timeout
 
 SOURCES := \
     app/main.c \
@@ -15,9 +16,12 @@ SOURCES := \
 
 OBJECTS := $(SOURCES:.c=.o)
 
-.PHONY: all clean
+.PHONY: all test clean
 
 all: $(TARGET)
+
+test: $(TEST_TARGET)
+	./$(TEST_TARGET)
 
 $(TARGET): $(OBJECTS)
 	$(CC) $(CFLAGS) $(OBJECTS) -o $@
@@ -28,5 +32,8 @@ app/%.o: app/%.c
 src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(TEST_TARGET): tests/test_dns_client.c src/dns_client.c include/dns_client.h
+	$(CC) $(CFLAGS) tests/test_dns_client.c src/dns_client.c -o $@
+
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(TARGET) $(TEST_TARGET)
