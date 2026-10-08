@@ -165,3 +165,56 @@ uint8_t dns_header_rcode(const DnsHeader *header){
 
     return (uint8_t)(header->flags & DNS_RCODE_MASK);
 }
+
+int dns_parse_question(const uint8_t *packet, size_t packet_size, size_t *offset,
+                       DnsQuestion *question){
+    size_t position;
+
+    if(!packet || !offset || !question){
+        return -1;
+    }
+
+    // Pergunta (RFC 1035, secao 4.1.2): QNAME, QTYPE, QCLASS
+    position = *offset;
+    if(dns_decode_name(packet, packet_size, &position, question->name, sizeof(question->name)) != 0){
+        return -1;
+    }
+
+    if(packet_size - position < DNS_QUESTION_FIXED_SIZE){
+        return -1;
+    }
+
+    question->qtype = dns_read_u16(&packet[position]);
+    question->qclass = dns_read_u16(&packet[position + 2]);
+    *offset = position + DNS_QUESTION_FIXED_SIZE;
+
+    return 0;
+}
+
+int dns_parse_questions(const uint8_t *packet, size_t packet_size, uint16_t question_count,
+                        size_t *offset){
+    DnsQuestion question;
+    size_t position;
+    uint16_t i;
+
+    if(!packet || !offset){
+        return -1;
+    }
+
+    position = *offset;
+
+    for(i = 0; i < question_count; i++){
+        if(dns_parse_question(packet, packet_size, &position, &question) != 0){
+            return -1;
+        }
+
+        // A consulta enviada e sempre MX/IN; a resposta deve ecoar a mesma pergunta
+        if(question.qtype != DNS_TYPE_MX || question.qclass != DNS_CLASS_IN){
+            return -1;
+        }
+    }
+
+    *offset = position;
+
+    return 0;
+}
