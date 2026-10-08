@@ -82,4 +82,35 @@ int dns_header_is_truncated(const DnsHeader *header);
 /* Retorna o RCODE (0 a 15) do cabecalho. */
 uint8_t dns_header_rcode(const DnsHeader *header);
 
+/*
+ * Le uma pergunta (QNAME, QTYPE, QCLASS) a partir de packet[*offset].
+ * QNAME pode usar name compression. QTYPE e QCLASS sao convertidos para
+ * host byte order.
+ *
+ * Em caso de sucesso, avanca *offset para depois de QCLASS e retorna 0.
+ * Retorna -1, sem alterar *offset, se o pacote estiver truncado ou o QNAME
+ * for invalido.
+ */
+int dns_parse_question(
+    const uint8_t *packet,
+    size_t packet_size,
+    size_t *offset,
+    DnsQuestion *question
+);
+
+/*
+ * Le as question_count perguntas (QDCOUNT) que comecam em packet[*offset],
+ * normalmente DNS_HEADER_SIZE, e confirma que todas sao do tipo MX e classe IN.
+ *
+ * Em caso de sucesso, deixa *offset apontando para o inicio da secao Answer e
+ * retorna 0. Retorna -1, sem alterar *offset, se o pacote nao contiver todas
+ * as perguntas indicadas ou alguma nao for MX/IN.
+ */
+int dns_parse_questions(
+    const uint8_t *packet,
+    size_t packet_size,
+    uint16_t question_count,
+    size_t *offset
+);
+
 #endif
