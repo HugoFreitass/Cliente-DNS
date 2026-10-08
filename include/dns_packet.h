@@ -9,6 +9,12 @@
 /* Tamanho dos campos QTYPE + QCLASS que seguem o QNAME na pergunta. */
 #define DNS_QUESTION_FIXED_SIZE 4
 
+/* Tamanho dos campos TYPE + CLASS + TTL + RDLENGTH que seguem o NAME no registro. */
+#define DNS_RR_FIXED_SIZE 10
+
+/* Tamanho do campo PREFERENCE no RDATA de um registro MX. */
+#define DNS_MX_PREFERENCE_SIZE 2
+
 /*
  * Monta em packet o payload de uma consulta DNS do tipo MX/IN para domain.
  *
@@ -111,6 +117,31 @@ int dns_parse_questions(
     size_t packet_size,
     uint16_t question_count,
     size_t *offset
+);
+
+/*
+ * Extrai os registros MX da secao Answer de uma resposta DNS completa.
+ *
+ * Le o cabecalho e a secao Question (que deve ser MX/IN) e percorre os
+ * ANCOUNT registros. Para cada registro MX grava PREFERENCE e EXCHANGE em
+ * records, na ordem em que aparecem; EXCHANGE pode usar name compression.
+ * Registros de outros tipos (ex.: CNAME) sao ignorados.
+ *
+ * Se houver mais registros MX do que records_capacity, apenas os primeiros
+ * records_capacity sao gravados; os demais continuam sendo validados.
+ * A quantidade gravada vai para *records_count (0 se nao houver MX).
+ *
+ * Retorna -1, sem alterar *records_count, se algum ponteiro for nulo, o
+ * pacote estiver truncado ou malformado, um registro MX nao for da classe IN
+ * ou o RDATA de um MX nao corresponder exatamente a RDLENGTH.
+ * O RCODE nao e interpretado aqui.
+ */
+int dns_parse_mx_records(
+    const uint8_t *packet,
+    size_t packet_size,
+    MxRecord *records,
+    size_t records_capacity,
+    size_t *records_count
 );
 
 #endif
