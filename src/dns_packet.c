@@ -4,7 +4,10 @@
 #include "dns_types.h"
 
 #include <arpa/inet.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // Escreve um inteiro de 16 bits em network byte order (big-endian)
 static void dns_write_u16(uint8_t *destination, uint16_t value){
@@ -48,6 +51,70 @@ int dns_build_mx_query(uint8_t *packet, size_t packet_size, size_t *packet_lengt
     offset += DNS_QUESTION_FIXED_SIZE;
 
     *packet_length = offset;
+
+    return 0;
+}
+
+// Alternativa a /dev/urandom: rand() semeado uma unica vez por execucao
+static uint16_t dns_fallback_random_u16(void){
+    static int seeded = 0;
+
+    if(!seeded){
+        srand((unsigned int)time(NULL) ^ (unsigned int)clock());
+        seeded = 1;
+    }
+
+    // RAND_MAX pode ter apenas 15 bits; combina duas chamadas para os 16 bits
+    return (uint16_t)(((unsigned int)rand() << 8) ^ (unsigned int)rand());
+}
+
+int dns_generate_transaction_id(uint16_t *transaction_id){
+    FILE *urandom;
+    uint8_t bytes[2];
+    size_t bytes_read = 0;
+
+    if(!transaction_id){
+        return -1;
+    }
+
+    urandom = fopen("/dev/urandom", "rb");
+    if(urandom){
+        bytes_read = fread(bytes, 1, sizeof(bytes), urandom);
+        fclose(urandom);
+    }
+
+    if(bytes_read == sizeof(bytes)){
+        *transaction_id = (uint16_t)((bytes[0] << 8) | bytes[1]);
+    } else {
+        *transaction_id = dns_fallback_random_u16();
+    }
+
+    return 0;
+}
+
+int dns_read_transaction_id(const uint8_t *packet, size_t packet_size, uint16_t *transaction_id){
+    uint16_t network_value;
+
+    if(!packet || !transaction_id || packet_size < sizeof(network_value)){
+        return -1;
+    }
+
+    memcpy(&network_value, packet, sizeof(network_value));
+    *transaction_id = ntohs(network_value); // Network to Host Short
+
+    return 0;
+}
+
+int dns_validate_transaction_id(const uint8_t *response, size_t response_length, uint16_t expected_id){
+    uint16_t received_id;
+
+    if(dns_read_transaction_id(response, response_length, &received_id) != 0){
+        return -1;
+    }
+
+    if(received_id != expected_id){
+        return -1;
+    }
 
     return 0;
 }
