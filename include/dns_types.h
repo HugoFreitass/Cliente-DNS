@@ -56,6 +56,12 @@ typedef struct {
 } DnsHeader;
 
 typedef struct {
+    char name[DNS_MAX_NAME + 1];
+    uint16_t qtype;
+    uint16_t qclass;
+} DnsQuestion;
+
+typedef struct {
     uint16_t preference;
     char exchange[DNS_MAX_NAME + 1];
 } MxRecord;
