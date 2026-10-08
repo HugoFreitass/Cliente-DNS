@@ -1,5 +1,6 @@
 /*
- * Testes da construcao da consulta DNS MX (dns_build_mx_query).
+ * Testes da construcao da consulta DNS MX (dns_build_mx_query) e do
+ * transaction ID (geracao, leitura e validacao).
  *
  * Compilar e executar a partir da raiz do projeto:
  *   gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude \
@@ -144,12 +145,73 @@ static void test_invalid_arguments(void){
           "etiqueta maior que 63 bytes e rejeitada");
 }
 
+static void test_transaction_id_generation(void){
+    uint16_t ids[32];
+    int all_equal = 1;
+    size_t i;
+
+    CHECK(dns_generate_transaction_id(NULL) == -1, "gerar ID com ponteiro nulo e rejeitado");
+
+    for(i = 0; i < 32; i++){
+        if(dns_generate_transaction_id(&ids[i]) != 0){
+            all_equal = -1;
+            break;
+        }
+        if(ids[i] != ids[0]){
+            all_equal = 0;
+        }
+    }
+
+    CHECK(all_equal != -1, "IDs gerados com sucesso");
+    CHECK(all_equal == 0, "consultas sucessivas nao usam sempre o mesmo ID");
+}
+
+static void test_transaction_id_in_query(void){
+    uint8_t packet[DNS_MAX_PACKET_SIZE];
+    size_t length = 0;
+    uint16_t sent_id;
+    uint16_t read_id = 0;
+
+    CHECK(dns_generate_transaction_id(&sent_id) == 0 &&
+          dns_build_mx_query(packet, sizeof(packet), &length, sent_id, "unb.br") == 0,
+          "consulta montada com ID aleatorio");
+    CHECK(packet[0] == (uint8_t)(sent_id >> 8) && packet[1] == (uint8_t)(sent_id & 0xFF),
+          "ID aleatorio gravado nos dois primeiros bytes em network byte order");
+    CHECK(dns_read_transaction_id(packet, length, &read_id) == 0 && read_id == sent_id,
+          "ID lido do pacote e igual ao ID enviado");
+}
+
+static void test_transaction_id_validation(void){
+    const uint8_t response[] = {
+        0xBE, 0xEF, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    uint16_t read_id = 0;
+
+    CHECK(dns_read_transaction_id(response, sizeof(response), &read_id) == 0 && read_id == 0xBEEF,
+          "ID da resposta lido em host byte order");
+    CHECK(dns_validate_transaction_id(response, sizeof(response), 0xBEEF) == 0,
+          "resposta com ID correto e aceita");
+    CHECK(dns_validate_transaction_id(response, sizeof(response), 0xBEEE) == -1,
+          "resposta com ID diferente e rejeitada");
+    CHECK(dns_validate_transaction_id(response, sizeof(response), 0xEFBE) == -1,
+          "resposta com ID em byte order invertido e rejeitada");
+    CHECK(dns_validate_transaction_id(response, 1, 0xBEEF) == -1,
+          "resposta com menos de 2 bytes e rejeitada");
+    CHECK(dns_validate_transaction_id(NULL, sizeof(response), 0xBEEF) == -1,
+          "resposta nula e rejeitada");
+    CHECK(dns_read_transaction_id(response, sizeof(response), NULL) == -1,
+          "leitura de ID com destino nulo e rejeitada");
+}
+
 int main(void){
     test_unb_br();
     test_header_fields();
     test_trailing_dot();
     test_buffer_size();
     test_invalid_arguments();
+    test_transaction_id_generation();
+    test_transaction_id_in_query();
+    test_transaction_id_validation();
 
     if(failures > 0){
         printf("\n%d teste(s) falharam\n", failures);

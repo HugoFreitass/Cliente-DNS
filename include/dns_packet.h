@@ -25,4 +25,36 @@ int dns_build_mx_query(
     const char *domain
 );
 
+/*
+ * Gera um transaction ID aleatorio de 16 bits e o grava em *transaction_id.
+ *
+ * Estrategia: le 2 bytes de /dev/urandom (fonte de entropia do kernel Linux).
+ * Se /dev/urandom nao estiver disponivel, usa rand() semeado uma unica vez
+ * com time() e clock(), combinando duas chamadas para cobrir os 16 bits.
+ *
+ * O chamador deve guardar o ID gerado para validar a resposta.
+ * Retorna 0 em caso de sucesso ou -1 se transaction_id for nulo.
+ */
+int dns_generate_transaction_id(uint16_t *transaction_id);
+
+/*
+ * Le o transaction ID dos dois primeiros bytes de packet (network byte order).
+ * Retorna 0 em caso de sucesso ou -1 se o pacote tiver menos de 2 bytes.
+ */
+int dns_read_transaction_id(
+    const uint8_t *packet,
+    size_t packet_size,
+    uint16_t *transaction_id
+);
+
+/*
+ * Confere se o transaction ID da resposta e igual ao ID enviado na consulta.
+ * Retorna 0 se forem iguais ou -1 se divergirem ou a resposta for invalida.
+ */
+int dns_validate_transaction_id(
+    const uint8_t *response,
+    size_t response_length,
+    uint16_t expected_id
+);
+
 #endif
