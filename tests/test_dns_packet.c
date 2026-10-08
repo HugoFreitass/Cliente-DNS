@@ -1,7 +1,7 @@
 /*
  * Testes da construcao da consulta DNS MX (dns_build_mx_query) e do
- * transaction ID (geracao, leitura e validacao), da leitura do cabecalho e
- * da secao de perguntas.
+ * transaction ID (geracao, leitura e validacao), da leitura do cabecalho,
+ * da secao de perguntas e dos registros MX.
  *
  * Compilar e executar a partir da raiz do projeto:
  *   gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude \
@@ -367,6 +367,239 @@ static void test_parse_built_query(void){
           "pergunta gerada por dns_build_mx_query e lida de volta ate o fim");
 }
 
+/* Resposta montada byte a byte nos testes do parser de registros MX. */
+typedef struct {
+    uint8_t data[DNS_MAX_PACKET_SIZE];
+    size_t length;
+} TestPacket;
+
+#define TYPE_A 1
+#define TYPE_CNAME 5
+#define CLASS_CH 3
+
+/* EXCHANGE "mail" + ponteiro para o QNAME (offset 12) -> "mail.unb.br" */
+static const uint8_t EXCHANGE_MAIL_PTR[] = { 0x04, 'm', 'a', 'i', 'l', 0xC0, 0x0C };
+
+/* EXCHANGE sem compressao -> "mx1.example.com" */
+static const uint8_t EXCHANGE_MX1[] = {
+    0x03, 'm', 'x', '1', 0x07, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0x03, 'c', 'o', 'm', 0x00
+};
+
+static void put_u16(TestPacket *packet, uint16_t value){
+    packet->data[packet->length++] = (uint8_t)(value >> 8);
+    packet->data[packet->length++] = (uint8_t)(value & 0xFF);
+}
+
+static void put_bytes(TestPacket *packet, const uint8_t *bytes, size_t length){
+    memcpy(&packet->data[packet->length], bytes, length);
+    packet->length += length;
+}
+
+/* Cabecalho (QR = 1, RCODE = 0) + pergunta unb.br MX/IN; a secao Answer comeca no offset 24 */
+static void start_response(TestPacket *packet, uint16_t answer_count){
+    const uint8_t qname[] = { 0x03, 'u', 'n', 'b', 0x02, 'b', 'r', 0x00 };
+
+    packet->length = 0;
+    put_u16(packet, 0x1234);
+    put_u16(packet, 0x8180);
+    put_u16(packet, 1);
+    put_u16(packet, answer_count);
+    put_u16(packet, 0);
+    put_u16(packet, 0);
+    put_bytes(packet, qname, sizeof(qname));
+    put_u16(packet, DNS_TYPE_MX);
+    put_u16(packet, DNS_CLASS_IN);
+}
+
+/* Registro com NAME = ponteiro para o QNAME e RDLENGTH informado separadamente do RDATA */
+static void add_raw_record(TestPacket *packet, uint16_t type, uint16_t rr_class, uint16_t rdlength,
+                           const uint8_t *rdata, size_t rdata_length){
+    put_u16(packet, 0xC00C);   // NAME
+    put_u16(packet, type);     // TYPE
+    put_u16(packet, rr_class); // CLASS
+    put_u16(packet, 0);        // TTL = 3600
+    put_u16(packet, 3600);
+    put_u16(packet, rdlength); // RDLENGTH
+    put_bytes(packet, rdata, rdata_length);
+}
+
+static void add_mx(TestPacket *packet, uint16_t preference, const uint8_t *exchange, size_t exchange_length){
+    uint8_t rdata[DNS_MAX_PACKET_SIZE];
+
+    rdata[0] = (uint8_t)(preference >> 8);
+    rdata[1] = (uint8_t)(preference & 0xFF);
+    memcpy(&rdata[2], exchange, exchange_length);
+    add_raw_record(packet, DNS_TYPE_MX, DNS_CLASS_IN, (uint16_t)(exchange_length + 2),
+                   rdata, exchange_length + 2);
+}
+
+static void test_parse_mx_single(void){
+    TestPacket packet;
+    MxRecord records[DNS_MAX_MX_RECORDS];
+    size_t count = 99;
+
+    start_response(&packet, 1);
+    add_mx(&packet, 10, EXCHANGE_MAIL_PTR, sizeof(EXCHANGE_MAIL_PTR));
+
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == 0 &&
+          count == 1,
+          "um registro MX e extraido");
+    CHECK(records[0].preference == 10, "PREFERENCE armazenada corretamente");
+    CHECK(strcmp(records[0].exchange, "mail.unb.br") == 0,
+          "EXCHANGE com compressao retorna o nome do servidor de e-mail");
+}
+
+static void test_parse_mx_multiple(void){
+    // EXCHANGE "mx2" + ponteiro para "example.com" dentro do EXCHANGE do primeiro MX (offset 42)
+    const uint8_t exchange_mx2[] = { 0x03, 'm', 'x', '2', 0xC0, 0x2A };
+    TestPacket packet;
+    MxRecord records[DNS_MAX_MX_RECORDS];
+    size_t count = 0;
+
+    start_response(&packet, 3);
+    add_mx(&packet, 20, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+    add_mx(&packet, 5, exchange_mx2, sizeof(exchange_mx2));
+    add_mx(&packet, 30, EXCHANGE_MAIL_PTR, sizeof(EXCHANGE_MAIL_PTR));
+
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == 0 &&
+          count == 3,
+          "multiplos registros MX sao extraidos");
+    CHECK(records[0].preference == 20 && strcmp(records[0].exchange, "mx1.example.com") == 0 &&
+          records[1].preference == 5 && strcmp(records[1].exchange, "mx2.example.com") == 0 &&
+          records[2].preference == 30 && strcmp(records[2].exchange, "mail.unb.br") == 0,
+          "registros mantem a ordem da resposta, com PREFERENCE e EXCHANGE corretos");
+}
+
+static void test_parse_mx_other_types(void){
+    const uint8_t cname_rdata[] = { 0xC0, 0x0C };
+    const uint8_t a_rdata[] = { 192, 0, 2, 1 };
+    TestPacket packet;
+    MxRecord records[DNS_MAX_MX_RECORDS];
+    size_t count = 0;
+
+    start_response(&packet, 3);
+    add_raw_record(&packet, TYPE_CNAME, DNS_CLASS_IN, sizeof(cname_rdata), cname_rdata, sizeof(cname_rdata));
+    add_raw_record(&packet, TYPE_A, CLASS_CH, sizeof(a_rdata), a_rdata, sizeof(a_rdata));
+    add_mx(&packet, 10, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == 0 &&
+          count == 1 && strcmp(records[0].exchange, "mx1.example.com") == 0,
+          "registros de outros tipos sao ignorados");
+
+    start_response(&packet, 1);
+    add_raw_record(&packet, TYPE_A, DNS_CLASS_IN, sizeof(a_rdata), a_rdata, sizeof(a_rdata));
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == 0 &&
+          count == 0,
+          "resposta sem MX retorna zero registros");
+
+    start_response(&packet, 0);
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == 0 &&
+          count == 0,
+          "resposta com ANCOUNT = 0 retorna zero registros");
+}
+
+static void test_parse_mx_capacity(void){
+    TestPacket packet;
+    MxRecord records[3];
+    size_t count = 0;
+
+    start_response(&packet, 3);
+    add_mx(&packet, 10, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+    add_mx(&packet, 20, EXCHANGE_MAIL_PTR, sizeof(EXCHANGE_MAIL_PTR));
+    add_mx(&packet, 30, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+
+    records[2].preference = 0xBEEF;
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, 2, &count) == 0 && count == 2 &&
+          records[2].preference == 0xBEEF,
+          "parser nao ultrapassa a capacidade do vetor");
+    CHECK(dns_parse_mx_records(packet.data, packet.length, NULL, 0, &count) == 0 && count == 0,
+          "capacidade zero com vetor nulo e aceita");
+}
+
+static void test_parse_mx_invalid_rdata(void){
+    const uint8_t preference_only[] = { 0x00 };
+    const uint8_t unterminated[] = { 0x00, 0x0A, 0x04, 'm', 'a', 'i', 'l' };
+    uint8_t rdata[2 + sizeof(EXCHANGE_MX1) + 1];
+    TestPacket packet;
+    MxRecord records[DNS_MAX_MX_RECORDS];
+    size_t count = 99;
+
+    rdata[0] = 0x00;
+    rdata[1] = 0x0A;
+    memcpy(&rdata[2], EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+    rdata[sizeof(rdata) - 1] = 0x00;
+
+    start_response(&packet, 1);
+    add_mx(&packet, 10, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+    CHECK(dns_parse_mx_records(packet.data, packet.length - 1, records, DNS_MAX_MX_RECORDS, &count) == -1 &&
+          count == 99,
+          "RDLENGTH maior que os bytes disponiveis e rejeitado");
+
+    start_response(&packet, 1);
+    add_raw_record(&packet, DNS_TYPE_MX, DNS_CLASS_IN, sizeof(preference_only),
+                   preference_only, sizeof(preference_only));
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "MX sem PREFERENCE completo e rejeitado");
+
+    start_response(&packet, 1);
+    add_raw_record(&packet, DNS_TYPE_MX, DNS_CLASS_IN, sizeof(unterminated),
+                   unterminated, sizeof(unterminated));
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "EXCHANGE incompleto no fim do pacote e rejeitado");
+
+    // RDLENGTH cobre so PREFERENCE + 3 bytes, mas o EXCHANGE continua alem dele
+    start_response(&packet, 1);
+    add_raw_record(&packet, DNS_TYPE_MX, DNS_CLASS_IN, 5, rdata, sizeof(rdata) - 1);
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "EXCHANGE que ultrapassa RDLENGTH e rejeitado");
+
+    // RDLENGTH tem um byte a mais do que PREFERENCE + EXCHANGE
+    start_response(&packet, 1);
+    add_raw_record(&packet, DNS_TYPE_MX, DNS_CLASS_IN, sizeof(rdata), rdata, sizeof(rdata));
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "RDATA com bytes sobrando apos o EXCHANGE e rejeitado");
+
+    start_response(&packet, 1);
+    add_raw_record(&packet, DNS_TYPE_MX, CLASS_CH, sizeof(rdata) - 1, rdata, sizeof(rdata) - 1);
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "MX com CLASS diferente de IN e rejeitado");
+}
+
+static void test_parse_mx_invalid_packet(void){
+    TestPacket packet;
+    MxRecord records[DNS_MAX_MX_RECORDS];
+    size_t count = 99;
+
+    start_response(&packet, 2);
+    add_mx(&packet, 10, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1 &&
+          count == 99,
+          "ANCOUNT maior que os registros do pacote e rejeitado");
+
+    start_response(&packet, 1);
+    add_mx(&packet, 10, EXCHANGE_MX1, sizeof(EXCHANGE_MX1));
+    CHECK(dns_parse_mx_records(packet.data, 24 + 2 + 5, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "registro sem TYPE/CLASS/TTL/RDLENGTH completos e rejeitado");
+
+    packet.data[2] = 0x01; // QR = 0
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "mensagem com QR = 0 e rejeitada");
+
+    packet.data[2] = 0x81;
+    packet.data[21] = TYPE_A; // QTYPE = A
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1,
+          "pergunta diferente de MX e rejeitada");
+
+    packet.data[21] = DNS_TYPE_MX;
+    CHECK(dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, &count) == 0 &&
+          count == 1,
+          "pacote restaurado volta a ser aceito");
+    CHECK(dns_parse_mx_records(NULL, packet.length, records, DNS_MAX_MX_RECORDS, &count) == -1 &&
+          dns_parse_mx_records(packet.data, packet.length, NULL, DNS_MAX_MX_RECORDS, &count) == -1 &&
+          dns_parse_mx_records(packet.data, packet.length, records, DNS_MAX_MX_RECORDS, NULL) == -1,
+          "ponteiros nulos sao rejeitados");
+}
+
 int main(void){
     test_unb_br();
     test_header_fields();
@@ -383,6 +616,12 @@ int main(void){
     test_parse_questions_compressed();
     test_parse_questions_invalid();
     test_parse_built_query();
+    test_parse_mx_single();
+    test_parse_mx_multiple();
+    test_parse_mx_other_types();
+    test_parse_mx_capacity();
+    test_parse_mx_invalid_rdata();
+    test_parse_mx_invalid_packet();
 
     if(failures > 0){
         printf("\n%d teste(s) falharam\n", failures);
