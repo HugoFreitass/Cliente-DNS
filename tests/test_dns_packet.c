@@ -1,6 +1,7 @@
 /*
  * Testes da construcao da consulta DNS MX (dns_build_mx_query) e do
- * transaction ID (geracao, leitura e validacao) e da leitura do cabecalho.
+ * transaction ID (geracao, leitura e validacao), da leitura do cabecalho e
+ * da secao de perguntas.
  *
  * Compilar e executar a partir da raiz do projeto:
  *   gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude \
@@ -273,6 +274,99 @@ static void test_parse_header_invalid(void){
           "cabecalho de saida nulo e rejeitado");
 }
 
+static void test_parse_questions_valid(void){
+    const uint8_t response[] = {
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x03, 'u', 'n', 'b', 0x02, 'b', 'r', 0x00, // QNAME
+        0x00, 0x0F, 0x00, 0x01,                     // QTYPE = MX, QCLASS = IN
+        0xC0, 0x0C                                  // inicio da secao Answer
+    };
+    DnsQuestion question;
+    size_t offset = DNS_HEADER_SIZE;
+
+    CHECK(dns_parse_question(response, sizeof(response), &offset, &question) == 0,
+          "pergunta lida corretamente");
+    CHECK(strcmp(question.name, "unb.br") == 0, "QNAME decodificado");
+    CHECK(question.qtype == DNS_TYPE_MX, "QTYPE lido em host byte order");
+    CHECK(question.qclass == DNS_CLASS_IN, "QCLASS lido em host byte order");
+    CHECK(offset == 24, "offset avanca para depois de QCLASS");
+
+    offset = DNS_HEADER_SIZE;
+    CHECK(dns_parse_questions(response, sizeof(response), 1, &offset) == 0 && offset == 24,
+          "QDCOUNT = 1: offset final aponta para a secao Answer");
+
+    offset = DNS_HEADER_SIZE;
+    CHECK(dns_parse_questions(response, sizeof(response), 0, &offset) == 0 &&
+          offset == DNS_HEADER_SIZE,
+          "QDCOUNT = 0: offset permanece no fim do cabecalho");
+}
+
+static void test_parse_questions_compressed(void){
+    const uint8_t response[] = {
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x03, 'u', 'n', 'b', 0x02, 'b', 'r', 0x00, 0x00, 0x0F, 0x00, 0x01, // pergunta 1
+        0x03, 'f', 'g', 'a', 0xC0, 0x0C, 0x00, 0x0F, 0x00, 0x01            // pergunta 2
+    };
+    DnsQuestion question;
+    size_t offset = 24;
+
+    CHECK(dns_parse_question(response, sizeof(response), &offset, &question) == 0 &&
+          strcmp(question.name, "fga.unb.br") == 0 && offset == sizeof(response),
+          "QNAME com compressao e tratado");
+
+    offset = DNS_HEADER_SIZE;
+    CHECK(dns_parse_questions(response, sizeof(response), 2, &offset) == 0 &&
+          offset == sizeof(response),
+          "QDCOUNT = 2: as duas perguntas sao processadas");
+}
+
+static void test_parse_questions_invalid(void){
+    uint8_t response[] = {
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x03, 'u', 'n', 'b', 0x02, 'b', 'r', 0x00, 0x00, 0x0F, 0x00, 0x01
+    };
+    DnsQuestion question;
+    size_t offset = DNS_HEADER_SIZE;
+
+    CHECK(dns_parse_questions(response, sizeof(response), 2, &offset) == -1 &&
+          offset == DNS_HEADER_SIZE,
+          "QDCOUNT maior que as perguntas do pacote e rejeitado");
+    CHECK(dns_parse_question(response, sizeof(response) - 1, &offset, &question) == -1 &&
+          offset == DNS_HEADER_SIZE,
+          "pergunta sem QCLASS completo e rejeitada");
+    CHECK(dns_parse_question(response, 17, &offset, &question) == -1,
+          "pergunta com QNAME truncado e rejeitada");
+    CHECK(dns_parse_question(response, sizeof(response), NULL, &question) == -1 &&
+          dns_parse_question(response, sizeof(response), &offset, NULL) == -1 &&
+          dns_parse_questions(NULL, sizeof(response), 1, &offset) == -1,
+          "ponteiros nulos sao rejeitados");
+
+    response[21] = 0x01; // QTYPE = A
+    CHECK(dns_parse_questions(response, sizeof(response), 1, &offset) == -1,
+          "pergunta com QTYPE diferente de MX e rejeitada");
+
+    response[21] = 0x0F;
+    response[23] = 0x03; // QCLASS = CH
+    CHECK(dns_parse_questions(response, sizeof(response), 1, &offset) == -1,
+          "pergunta com QCLASS diferente de IN e rejeitada");
+}
+
+static void test_parse_built_query(void){
+    uint8_t packet[DNS_MAX_PACKET_SIZE];
+    size_t length = 0;
+    size_t offset = DNS_HEADER_SIZE;
+    DnsHeader header;
+
+    CHECK(dns_build_mx_query(packet, sizeof(packet), &length, 0x4321, "mail.example.com") == 0,
+          "consulta montada para leitura de volta");
+
+    packet[2] |= 0x80; // QR = 1, simulando a resposta que ecoa a pergunta
+    CHECK(dns_parse_header(packet, length, &header) == 0 &&
+          dns_parse_questions(packet, length, header.questions, &offset) == 0 &&
+          offset == length,
+          "pergunta gerada por dns_build_mx_query e lida de volta ate o fim");
+}
+
 int main(void){
     test_unb_br();
     test_header_fields();
@@ -285,6 +379,10 @@ int main(void){
     test_parse_header_valid();
     test_parse_header_flags();
     test_parse_header_invalid();
+    test_parse_questions_valid();
+    test_parse_questions_compressed();
+    test_parse_questions_invalid();
+    test_parse_built_query();
 
     if(failures > 0){
         printf("\n%d teste(s) falharam\n", failures);
