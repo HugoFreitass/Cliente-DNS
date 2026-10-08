@@ -1,0 +1,50 @@
+#ifndef DNS_TYPES_H
+#define DNS_TYPES_H
+
+#include <stdint.h>
+
+/* Porta UDP padrao do servico DNS (RFC 1035, secao 4.2.1). */
+#define DNS_PORT 53
+
+/* Tamanho maximo de uma mensagem DNS sobre UDP (RFC 1035, secao 2.3.4). */
+#define DNS_MAX_PACKET_SIZE 512
+
+/* Tamanho fixo do cabecalho DNS, em bytes. */
+#define DNS_HEADER_SIZE 12
+
+/* Tamanho maximo de um nome DNS, em bytes (RFC 1035, secao 2.3.4). */
+#define DNS_MAX_NAME 255
+
+/* Tamanho maximo de uma etiqueta (label) DNS, em bytes. */
+#define DNS_MAX_LABEL 63
+
+/* Flags de uma consulta padrao com recursao desejada (RD = 1). */
+#define DNS_FLAGS_STANDARD_QUERY 0x0100
+
+/* TYPE MX: mail exchange (RFC 1035, secao 3.2.2). */
+#define DNS_TYPE_MX 15
+
+/* CLASS IN: Internet (RFC 1035, secao 3.2.4). */
+#define DNS_CLASS_IN 1
+
+/* Quantidade maxima de tentativas de envio da consulta. */
+#define DNS_MAX_ATTEMPTS 3
+
+/* Tempo de espera por resposta em cada tentativa, em segundos. */
+#define DNS_TIMEOUT_SECONDS 2
+
+typedef struct {
+    uint16_t id;
+    uint16_t flags;
+    uint16_t questions;
+    uint16_t answers;
+    uint16_t authority;
+    uint16_t additional;
+} DnsHeader;
+
+typedef struct {
+    uint16_t preference;
+    char exchange[DNS_MAX_NAME + 1];
+} MxRecord;
+
+#endif
