@@ -1,6 +1,8 @@
 #ifndef DNS_PACKET_H
 #define DNS_PACKET_H
 
+#include "dns_types.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -56,5 +58,28 @@ int dns_validate_transaction_id(
     size_t response_length,
     uint16_t expected_id
 );
+
+/*
+ * Le os 12 bytes do cabecalho de uma resposta DNS e grava em *header os campos
+ * ID, FLAGS, QDCOUNT, ANCOUNT, NSCOUNT e ARCOUNT em host byte order.
+ *
+ * Retorna -1 se algum ponteiro for nulo, se o pacote tiver menos de 12 bytes
+ * ou se o bit QR for 0 (a mensagem e uma consulta, nao uma resposta).
+ * O transaction ID e conferido por dns_validate_transaction_id().
+ */
+int dns_parse_header(
+    const uint8_t *packet,
+    size_t packet_size,
+    DnsHeader *header
+);
+
+/* Retorna 1 se o bit QR indicar resposta, 0 caso contrario. */
+int dns_header_is_response(const DnsHeader *header);
+
+/* Retorna 1 se o bit TC indicar resposta truncada, 0 caso contrario. */
+int dns_header_is_truncated(const DnsHeader *header);
+
+/* Retorna o RCODE (0 a 15) do cabecalho. */
+uint8_t dns_header_rcode(const DnsHeader *header);
 
 #endif

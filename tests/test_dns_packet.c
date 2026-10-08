@@ -1,6 +1,6 @@
 /*
  * Testes da construcao da consulta DNS MX (dns_build_mx_query) e do
- * transaction ID (geracao, leitura e validacao).
+ * transaction ID (geracao, leitura e validacao) e da leitura do cabecalho.
  *
  * Compilar e executar a partir da raiz do projeto:
  *   gcc -std=c11 -Wall -Wextra -Wpedantic -Iinclude \
@@ -203,6 +203,76 @@ static void test_transaction_id_validation(void){
           "leitura de ID com destino nulo e rejeitada");
 }
 
+static void test_parse_header_valid(void){
+    const uint8_t response[] = {
+        0xBE, 0xEF,                         // ID
+        0x81, 0x80,                         // FLAGS: QR = 1, RD = 1, RA = 1, RCODE = 0
+        0x00, 0x01,                         // QDCOUNT
+        0x01, 0x02,                         // ANCOUNT
+        0x03, 0x04,                         // NSCOUNT
+        0x05, 0x06,                         // ARCOUNT
+        0x03, 'u', 'n', 'b'                 // inicio da secao Question (ignorado)
+    };
+    DnsHeader header;
+
+    CHECK(dns_parse_header(response, sizeof(response), &header) == 0,
+          "cabecalho valido e interpretado");
+    CHECK(header.id == 0xBEEF, "ID convertido para host byte order");
+    CHECK(header.flags == 0x8180, "FLAGS convertido para host byte order");
+    CHECK(header.questions == 1, "QDCOUNT convertido para host byte order");
+    CHECK(header.answers == 0x0102, "ANCOUNT convertido para host byte order");
+    CHECK(header.authority == 0x0304, "NSCOUNT convertido para host byte order");
+    CHECK(header.additional == 0x0506, "ARCOUNT convertido para host byte order");
+    CHECK(dns_header_is_response(&header) == 1, "QR = 1 identificado como resposta");
+    CHECK(dns_header_is_truncated(&header) == 0, "TC = 0 identificado como nao truncada");
+    CHECK(dns_header_rcode(&header) == DNS_RCODE_NOERROR, "RCODE = 0 (NOERROR) extraido");
+}
+
+static void test_parse_header_flags(void){
+    uint8_t response[DNS_HEADER_SIZE] = {
+        0x12, 0x34, 0x81, 0x83, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    DnsHeader header;
+
+    CHECK(dns_parse_header(response, sizeof(response), &header) == 0 &&
+          dns_header_rcode(&header) == DNS_RCODE_NXDOMAIN,
+          "RCODE = 3 (NXDOMAIN) extraido");
+
+    response[3] = 0x82;
+    CHECK(dns_parse_header(response, sizeof(response), &header) == 0 &&
+          dns_header_rcode(&header) == DNS_RCODE_SERVFAIL,
+          "RCODE = 2 (SERVFAIL) extraido");
+
+    response[2] = 0x83;
+    response[3] = 0x80;
+    CHECK(dns_parse_header(response, sizeof(response), &header) == 0 &&
+          dns_header_is_truncated(&header) == 1,
+          "TC = 1 identificado como truncada");
+}
+
+static void test_parse_header_invalid(void){
+    const uint8_t query[DNS_HEADER_SIZE] = {
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    const uint8_t response[DNS_HEADER_SIZE] = {
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    DnsHeader header;
+
+    header.id = 0xAAAA;
+    CHECK(dns_parse_header(query, sizeof(query), &header) == -1,
+          "mensagem com QR = 0 e rejeitada");
+    CHECK(header.id == 0xAAAA, "cabecalho de saida nao e alterado quando ha erro");
+    CHECK(dns_parse_header(response, DNS_HEADER_SIZE - 1, &header) == -1,
+          "pacote menor que 12 bytes e rejeitado");
+    CHECK(dns_parse_header(response, 0, &header) == -1,
+          "pacote vazio e rejeitado");
+    CHECK(dns_parse_header(NULL, sizeof(response), &header) == -1,
+          "pacote nulo e rejeitado");
+    CHECK(dns_parse_header(response, sizeof(response), NULL) == -1,
+          "cabecalho de saida nulo e rejeitado");
+}
+
 int main(void){
     test_unb_br();
     test_header_fields();
@@ -212,6 +282,9 @@ int main(void){
     test_transaction_id_generation();
     test_transaction_id_in_query();
     test_transaction_id_validation();
+    test_parse_header_valid();
+    test_parse_header_flags();
+    test_parse_header_invalid();
 
     if(failures > 0){
         printf("\n%d teste(s) falharam\n", failures);

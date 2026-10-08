@@ -16,6 +16,15 @@ static void dns_write_u16(uint8_t *destination, uint16_t value){
     memcpy(destination, &network_value, sizeof(network_value));
 }
 
+// Le um inteiro de 16 bits em network byte order e o converte para host byte order
+static uint16_t dns_read_u16(const uint8_t *source){
+    uint16_t network_value;
+
+    memcpy(&network_value, source, sizeof(network_value));
+
+    return ntohs(network_value); // Network to Host Short
+}
+
 int dns_build_mx_query(uint8_t *packet, size_t packet_size, size_t *packet_length,
                        uint16_t transaction_id, const char *domain){
     size_t offset;
@@ -93,14 +102,11 @@ int dns_generate_transaction_id(uint16_t *transaction_id){
 }
 
 int dns_read_transaction_id(const uint8_t *packet, size_t packet_size, uint16_t *transaction_id){
-    uint16_t network_value;
-
-    if(!packet || !transaction_id || packet_size < sizeof(network_value)){
+    if(!packet || !transaction_id || packet_size < sizeof(uint16_t)){
         return -1;
     }
 
-    memcpy(&network_value, packet, sizeof(network_value));
-    *transaction_id = ntohs(network_value); // Network to Host Short
+    *transaction_id = dns_read_u16(packet);
 
     return 0;
 }
@@ -117,4 +123,45 @@ int dns_validate_transaction_id(const uint8_t *response, size_t response_length,
     }
 
     return 0;
+}
+
+int dns_parse_header(const uint8_t *packet, size_t packet_size, DnsHeader *header){
+    DnsHeader parsed;
+
+    if(!packet || !header || packet_size < DNS_HEADER_SIZE){
+        return -1;
+    }
+
+    // Cabecalho (RFC 1035, secao 4.1.1)
+    parsed.id = dns_read_u16(&packet[0]);
+    parsed.flags = dns_read_u16(&packet[2]);
+    parsed.questions = dns_read_u16(&packet[4]);
+    parsed.answers = dns_read_u16(&packet[6]);
+    parsed.authority = dns_read_u16(&packet[8]);
+    parsed.additional = dns_read_u16(&packet[10]);
+
+    // QR = 0 indica uma consulta, nao uma resposta
+    if(!dns_header_is_response(&parsed)){
+        return -1;
+    }
+
+    *header = parsed;
+
+    return 0;
+}
+
+int dns_header_is_response(const DnsHeader *header){
+    return header && (header->flags & DNS_FLAG_QR) != 0;
+}
+
+int dns_header_is_truncated(const DnsHeader *header){
+    return header && (header->flags & DNS_FLAG_TC) != 0;
+}
+
+uint8_t dns_header_rcode(const DnsHeader *header){
+    if(!header){
+        return 0;
+    }
+
+    return (uint8_t)(header->flags & DNS_RCODE_MASK);
 }

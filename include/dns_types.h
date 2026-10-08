@@ -21,6 +21,19 @@
 /* Flags de uma consulta padrao com recursao desejada (RD = 1). */
 #define DNS_FLAGS_STANDARD_QUERY 0x0100
 
+/* Mascaras do campo FLAGS do cabecalho (RFC 1035, secao 4.1.1). */
+#define DNS_FLAG_QR 0x8000     /* 1 = resposta, 0 = consulta */
+#define DNS_FLAG_TC 0x0200     /* mensagem truncada */
+#define DNS_RCODE_MASK 0x000F  /* codigo de resposta (4 bits menos significativos) */
+
+/* Valores de RCODE (RFC 1035, secao 4.1.1). */
+#define DNS_RCODE_NOERROR 0
+#define DNS_RCODE_FORMERR 1
+#define DNS_RCODE_SERVFAIL 2
+#define DNS_RCODE_NXDOMAIN 3
+#define DNS_RCODE_NOTIMP 4
+#define DNS_RCODE_REFUSED 5
+
 /* TYPE MX: mail exchange (RFC 1035, secao 3.2.2). */
 #define DNS_TYPE_MX 15
 
