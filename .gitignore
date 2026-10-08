@@ -1,0 +1,18 @@
+# Arquivos objeto
+*.o
+
+# Executáveis
+meu_cliente
+meu_cliente.exe
+*.exe
+
+# Diretórios de build
+build/
+dist/
+
+# Arquivos temporários
+*.tmp
+*.log
+
+# Configurações do VS Code
+.vscode/
