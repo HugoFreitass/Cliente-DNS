@@ -18,4 +18,21 @@ int dns_encode_name(
     const char *name
 );
 
+/*
+ * Decodifica o nome que comeca em packet[*offset] para o formato textual.
+ * Exemplo: 03 www 07 example 03 com 00 -> "www.example.com".
+ * O nome raiz (byte 0 isolado) gera "".
+ *
+ * Em caso de sucesso, avanca *offset para logo depois do byte 0 final
+ * e retorna 0. Retorna -1, sem alterar *offset, se o pacote estiver truncado,
+ * uma etiqueta for invalida ou output for pequeno.
+ */
+int dns_decode_name(
+    const uint8_t *packet,
+    size_t packet_size,
+    size_t *offset,
+    char *output,
+    size_t output_size
+);
+
 #endif
