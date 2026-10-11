@@ -63,8 +63,10 @@ int dns_encode_name(uint8_t *buffer, size_t buffer_size, size_t *offset, const c
 int dns_decode_name(const uint8_t *packet, size_t packet_size, size_t *offset,
                     char *output, size_t output_size){
     size_t position;
+    size_t end_offset = 0;
     size_t output_length = 0;
     size_t encoded_length = 0;
+    int jumps = 0;
 
     if(!packet || !offset || !output || output_size == 0){
         return -1;
@@ -81,18 +83,43 @@ int dns_decode_name(const uint8_t *packet, size_t packet_size, size_t *offset,
 
         label_length = packet[position];
 
-        // Sem suporte a ponteiro nesta etapa: qualquer prefixo diferente de 00 e rejeitado
-        if((label_length & 0xC0) != 0){
+        if((label_length & DNS_POINTER_MASK) == DNS_POINTER_MASK){
+            size_t pointer;
+
+            if(position + 1 >= packet_size){
+                return -1;
+            }
+
+            // Os 14 bits restantes indicam o offset do nome dentro do pacote
+            pointer = ((size_t)(label_length & 0x3F) << 8) | packet[position + 1];
+            if(pointer >= packet_size){
+                return -1;
+            }
+
+            // O nome termina na posicao original logo depois do primeiro ponteiro
+            if(jumps == 0){
+                end_offset = position + 2;
+            }
+
+            jumps++;
+            if(jumps > DNS_MAX_POINTER_JUMPS){
+                return -1;
+            }
+
+            position = pointer;
+            continue;
+        }
+
+        // Prefixos 01 e 10 sao reservados
+        if((label_length & DNS_POINTER_MASK) != 0){
             return -1;
         }
 
         if(label_length == 0){
-            position++;
+            if(jumps == 0){
+                end_offset = position + 1;
+            }
             break;
-        }
-
-        if(label_length > DNS_MAX_LABEL){
-            return -1;
         }
 
         if(packet_size - position - 1 < label_length){
@@ -125,7 +152,7 @@ int dns_decode_name(const uint8_t *packet, size_t packet_size, size_t *offset,
     }
 
     output[output_length] = '\0';
-    *offset = position;
+    *offset = end_offset;
 
     return 0;
 }
