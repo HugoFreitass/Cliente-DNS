@@ -46,6 +46,12 @@
 /* Tempo de espera por resposta em cada tentativa, em segundos. */
 #define DNS_TIMEOUT_SECONDS 2
 
+/*
+ * Capacidade sugerida para o vetor de registros MX. Cada registro MX ocupa ao
+ * menos 16 bytes na resposta, entao um pacote de 512 bytes contem no maximo ~30.
+ */
+#define DNS_MAX_MX_RECORDS 32
+
 typedef struct {
     uint16_t id;
     uint16_t flags;
