@@ -7,6 +7,19 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <unistd.h>
+
+static uint16_t generate_transaction_id(void) {
+    static int seeded;
+
+    if (!seeded) {
+        srand((unsigned int)time(NULL) ^ (unsigned int)getpid());
+        seeded = 1;
+    }
+
+    return (uint16_t)rand();
+}
 
 int main(int argc, char *argv[]) {
     CliArguments arguments;
@@ -17,6 +30,7 @@ int main(int argc, char *argv[]) {
     size_t response_length;
     size_t record_count;
     DnsMxResult mx_result;
+    uint16_t transaction_id;
     int result;
 
     if (cli_parse_arguments(argc, argv, &arguments) != 0) {
@@ -24,11 +38,13 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    transaction_id = generate_transaction_id();
+
     if (dns_build_mx_query(
             query,
             sizeof(query),
             &query_length,
-            0x1234,
+            transaction_id,
             arguments.domain
         ) != 0) {
         fprintf(stderr, "Dominio invalido: %s\n", arguments.domain);
@@ -40,7 +56,7 @@ int main(int argc, char *argv[]) {
         DNS_PORT,
         query,
         query_length,
-        0x1234,
+        transaction_id,
         response,
         sizeof(response),
         &response_length
@@ -67,7 +83,7 @@ int main(int argc, char *argv[]) {
     mx_result = dns_parse_mx_response(
         response,
         response_length,
-        0x1234,
+        transaction_id,
         records,
         sizeof(records) / sizeof(records[0]),
         &record_count
