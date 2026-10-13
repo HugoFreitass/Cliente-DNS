@@ -14,7 +14,8 @@ TEST_DNS_NAME := tests/test_dns_name
 SOURCES := \
     app/main.c \
     src/cli.c \
-    src/dns_client.c
+    src/dns_client.c \
+    src/dns_retry.c
 
 OBJECTS := $(SOURCES:.c=.o)
 
