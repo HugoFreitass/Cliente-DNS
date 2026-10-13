@@ -165,3 +165,145 @@ uint8_t dns_header_rcode(const DnsHeader *header){
 
     return (uint8_t)(header->flags & DNS_RCODE_MASK);
 }
+
+int dns_parse_question(const uint8_t *packet, size_t packet_size, size_t *offset,
+                       DnsQuestion *question){
+    size_t position;
+
+    if(!packet || !offset || !question){
+        return -1;
+    }
+
+    // Pergunta (RFC 1035, secao 4.1.2): QNAME, QTYPE, QCLASS
+    position = *offset;
+    if(dns_decode_name(packet, packet_size, &position, question->name, sizeof(question->name)) != 0){
+        return -1;
+    }
+
+    if(packet_size - position < DNS_QUESTION_FIXED_SIZE){
+        return -1;
+    }
+
+    question->qtype = dns_read_u16(&packet[position]);
+    question->qclass = dns_read_u16(&packet[position + 2]);
+    *offset = position + DNS_QUESTION_FIXED_SIZE;
+
+    return 0;
+}
+
+int dns_parse_questions(const uint8_t *packet, size_t packet_size, uint16_t question_count,
+                        size_t *offset){
+    DnsQuestion question;
+    size_t position;
+    uint16_t i;
+
+    if(!packet || !offset){
+        return -1;
+    }
+
+    position = *offset;
+
+    for(i = 0; i < question_count; i++){
+        if(dns_parse_question(packet, packet_size, &position, &question) != 0){
+            return -1;
+        }
+
+        // A consulta enviada e sempre MX/IN; a resposta deve ecoar a mesma pergunta
+        if(question.qtype != DNS_TYPE_MX || question.qclass != DNS_CLASS_IN){
+            return -1;
+        }
+    }
+
+    *offset = position;
+
+    return 0;
+}
+
+int dns_parse_mx_records(const uint8_t *packet, size_t packet_size, MxRecord *records,
+                         size_t records_capacity, size_t *records_count){
+    DnsHeader header;
+    char owner_name[DNS_MAX_NAME + 1];
+    size_t offset = DNS_HEADER_SIZE;
+    size_t count = 0;
+    uint16_t i;
+
+    if(!packet || !records_count || (!records && records_capacity > 0)){
+        return -1;
+    }
+
+    if(dns_parse_header(packet, packet_size, &header) != 0){
+        return -1;
+    }
+
+    if(dns_parse_questions(packet, packet_size, header.questions, &offset) != 0){
+        return -1;
+    }
+
+    // Registro (RFC 1035, secao 4.1.3): NAME, TYPE, CLASS, TTL, RDLENGTH, RDATA
+    for(i = 0; i < header.answers; i++){
+        uint16_t rr_type;
+        uint16_t rr_class;
+        uint16_t rdlength;
+        size_t rdata_start;
+        size_t rdata_end;
+
+        // NAME e lido apenas para avancar o offset (pode ser o alvo de um CNAME)
+        if(dns_decode_name(packet, packet_size, &offset, owner_name, sizeof(owner_name)) != 0){
+            return -1;
+        }
+
+        if(packet_size - offset < DNS_RR_FIXED_SIZE){
+            return -1;
+        }
+
+        rr_type = dns_read_u16(&packet[offset]);
+        rr_class = dns_read_u16(&packet[offset + 2]);
+        // TTL (offset + 4, 32 bits) nao e utilizado
+        rdlength = dns_read_u16(&packet[offset + 8]);
+
+        rdata_start = offset + DNS_RR_FIXED_SIZE;
+        if(packet_size - rdata_start < rdlength){
+            return -1;
+        }
+        rdata_end = rdata_start + rdlength;
+
+        // RDATA do MX (RFC 1035, secao 3.3.9): PREFERENCE, EXCHANGE
+        if(rr_type == DNS_TYPE_MX){
+            MxRecord record;
+            size_t exchange_offset;
+
+            if(rr_class != DNS_CLASS_IN){
+                return -1;
+            }
+
+            // PREFERENCE + ao menos o byte 0 do EXCHANGE
+            if(rdlength < DNS_MX_PREFERENCE_SIZE + 1){
+                return -1;
+            }
+
+            record.preference = dns_read_u16(&packet[rdata_start]);
+
+            exchange_offset = rdata_start + DNS_MX_PREFERENCE_SIZE;
+            if(dns_decode_name(packet, packet_size, &exchange_offset,
+                               record.exchange, sizeof(record.exchange)) != 0){
+                return -1;
+            }
+
+            // O EXCHANGE deve ocupar exatamente o restante do RDATA
+            if(exchange_offset != rdata_end){
+                return -1;
+            }
+
+            if(count < records_capacity){
+                records[count++] = record;
+            }
+        }
+
+        // Outros tipos sao ignorados pulando RDLENGTH bytes
+        offset = rdata_end;
+    }
+
+    *records_count = count;
+
+    return 0;
+}
