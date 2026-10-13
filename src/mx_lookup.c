@@ -23,20 +23,33 @@ static int compare_mx_records(const void *left, const void *right) {
 static int skip_name(const uint8_t *packet, size_t packet_length, size_t *offset) {
     size_t position = *offset;
     size_t labels = 0;
+    int followed_pointer = 0;
 
     while (position < packet_length) {
         uint8_t length = packet[position++];
 
         if (length == 0) {
-            *offset = position;
+            if (!followed_pointer) {
+                *offset = position;
+            }
             return 0;
         }
         if ((length & 0xC0) == 0xC0) {
+            uint16_t pointer;
+
             if (position >= packet_length) {
                 return -1;
             }
-            *offset = position + 1;
-            return 0;
+            pointer = (uint16_t)(((length & 0x3F) << 8) | packet[position]);
+            if (pointer >= packet_length || ++labels > DNS_MAX_NAME) {
+                return -1;
+            }
+            if (!followed_pointer) {
+                *offset = position + 1;
+                followed_pointer = 1;
+            }
+            position = pointer;
+            continue;
         }
         if ((length & 0xC0) != 0 || length > DNS_MAX_LABEL ||
             packet_length - position < length || ++labels > DNS_MAX_NAME) {
@@ -52,14 +65,19 @@ static int read_name(
     const uint8_t *packet,
     size_t packet_length,
     size_t offset,
+    size_t inline_end,
     char *name,
     size_t name_capacity
 ) {
     size_t position = offset;
     size_t output_length = 0;
     size_t jumps = 0;
+    int followed_pointer = 0;
 
     while (position < packet_length) {
+        if (!followed_pointer && position >= inline_end) {
+            return -1;
+        }
         uint8_t length = packet[position++];
 
         if (length == 0) {
@@ -80,6 +98,7 @@ static int read_name(
                 return -1;
             }
             position = pointer;
+            followed_pointer = 1;
             continue;
         }
         if ((length & 0xC0) != 0 || length > DNS_MAX_LABEL ||
@@ -143,13 +162,6 @@ DnsMxResult dns_parse_mx_response(
         offset += 4;
     }
 
-    if (rcode == 3) {
-        return DNS_MX_NXDOMAIN;
-    }
-    if (rcode != 0) {
-        return DNS_MX_INVALID_RESPONSE;
-    }
-
     for (index = 0; index < answer_count; ++index) {
         uint16_t type;
         uint16_t class;
@@ -170,17 +182,31 @@ DnsMxResult dns_parse_mx_response(
 
         data_offset = offset;
         if (type == DNS_TYPE_MX && class == DNS_CLASS_IN) {
-            if (data_length < 3 || records == NULL ||
-                *record_count >= records_capacity ||
+            char exchange[DNS_MAX_NAME + 1];
+
+            if (data_length < 3 ||
                 read_name(response, response_length, data_offset + 2,
-                          records[*record_count].exchange,
-                          sizeof(records[*record_count].exchange)) != 0) {
+                          data_offset + data_length, exchange,
+                          sizeof(exchange)) != 0) {
                 return DNS_MX_INVALID_RESPONSE;
             }
-            records[*record_count].preference = read_u16(&response[data_offset]);
-            ++(*record_count);
+            if (rcode == 0) {
+                if (records == NULL || *record_count >= records_capacity) {
+                    return DNS_MX_INVALID_RESPONSE;
+                }
+                records[*record_count].preference = read_u16(&response[data_offset]);
+                memcpy(records[*record_count].exchange, exchange, sizeof(exchange));
+                ++(*record_count);
+            }
         }
         offset += data_length;
+    }
+
+    if (rcode == 3) {
+        return DNS_MX_NXDOMAIN;
+    }
+    if (rcode != 0) {
+        return DNS_MX_INVALID_RESPONSE;
     }
 
     if (*record_count == 0) {
