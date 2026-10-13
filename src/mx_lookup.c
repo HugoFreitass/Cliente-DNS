@@ -1,9 +1,23 @@
 #include "mx_lookup.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 static uint16_t read_u16(const uint8_t *data) {
     return (uint16_t)(((uint16_t)data[0] << 8) | data[1]);
+}
+
+static int compare_mx_records(const void *left, const void *right) {
+    const MxRecord *left_record = left;
+    const MxRecord *right_record = right;
+
+    if (left_record->preference < right_record->preference) {
+        return -1;
+    }
+    if (left_record->preference > right_record->preference) {
+        return 1;
+    }
+    return strcmp(left_record->exchange, right_record->exchange);
 }
 
 static int skip_name(const uint8_t *packet, size_t packet_length, size_t *offset) {
@@ -169,5 +183,10 @@ DnsMxResult dns_parse_mx_response(
         offset += data_length;
     }
 
-    return *record_count == 0 ? DNS_MX_NOT_FOUND : DNS_MX_FOUND;
+    if (*record_count == 0) {
+        return DNS_MX_NOT_FOUND;
+    }
+
+    qsort(records, *record_count, sizeof(records[0]), compare_mx_records);
+    return DNS_MX_FOUND;
 }
