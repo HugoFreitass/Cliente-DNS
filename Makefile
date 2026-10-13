@@ -9,6 +9,8 @@ CFLAGS := -std=c11 \
 TARGET := meu_cliente
 TEST_TARGET := tests/test_dns_client_timeout
 
+TEST_DNS_NAME := tests/test_dns_name
+
 SOURCES := \
     app/main.c \
     src/cli.c \
@@ -16,11 +18,11 @@ SOURCES := \
 
 OBJECTS := $(SOURCES:.c=.o)
 
-.PHONY: all test clean
+.PHONY: all clean test test_dns_name
 
 all: $(TARGET)
 
-test: $(TEST_TARGET)
+test: $(TEST_TARGET) test_dns_name
 	./$(TEST_TARGET)
 
 $(TARGET): $(OBJECTS)
@@ -35,5 +37,11 @@ src/%.o: src/%.c
 $(TEST_TARGET): tests/test_dns_client.c src/dns_client.c include/dns_client.h
 	$(CC) $(CFLAGS) tests/test_dns_client.c src/dns_client.c -o $@
 
+$(TEST_DNS_NAME): tests/test_dns_name.c src/dns_name.c
+	$(CC) $(CFLAGS) $^ -o $@
+
+test_dns_name: $(TEST_DNS_NAME)
+	./$(TEST_DNS_NAME)
+
 clean:
-	rm -f $(OBJECTS) $(TARGET) $(TEST_TARGET)
+	rm -f $(OBJECTS) $(TARGET) $(TEST_TARGET) $(TEST_TARGET).exe $(TEST_DNS_NAME) $(TEST_DNS_NAME).exe
