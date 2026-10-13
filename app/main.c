@@ -47,8 +47,9 @@ int main(int argc, char *argv[]) {
     );
 
     if (result == DNS_RETRY_EXHAUSTED) {
-        printf(
-            "Nao foi possivel coletar entrada MX para %s\n",
+        fprintf(
+            stderr,
+            "Nao foi possível coletar entrada MX para %s\n",
             arguments.domain
         );
         return EXIT_FAILURE;
@@ -85,14 +86,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    for (size_t index = 0; index < record_count; ++index) {
-        printf(
-            "MX %s %u %s\n",
-            arguments.domain,
-            records[index].preference,
-            records[index].exchange
-        );
-    }
+    printf("%s <> %s\n", arguments.domain, records[0].exchange);
 
     return EXIT_SUCCESS;
 }
