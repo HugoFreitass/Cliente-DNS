@@ -1,3 +1,8 @@
+# Integrantes
+Pedro Henrique Ferreira Xavier - 241025990
+Hugo Freitas Silva - 241041302
+Philipe Amâncio Reis Caetano - 241040350
+
 # Cliente DNS
 
 Cliente DNS desenvolvido em C para realizar consultas do tipo MX usando
